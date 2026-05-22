@@ -343,7 +343,6 @@ class EmelyaLightPanelHui extends LitElement {
     hass: {},
     config: {},
     power: { state: true },
-    _tilesVisible: { state: true }
   };
 
   static styles = css`
@@ -445,40 +444,6 @@ class EmelyaLightPanelHui extends LitElement {
       gap: 8px;
       z-index: 0;
     }
-    .skeleton-overlay {
-      position: absolute;
-      inset: 0;
-      border-radius: 24px;
-      background: #1C1B1F;
-      z-index: 5;
-      opacity: 1;
-      transition: opacity 0.25s ease;
-      pointer-events: none;
-    }
-    .skeleton-overlay.hidden { opacity: 0; }
-
-    .tile-skeleton {
-      border-radius: 24px;
-      background: #1C1B1F;
-      position: relative;
-      overflow: hidden;
-    }
-    .tile-skeleton::before {
-      content: "" !important;
-      position: absolute !important;
-      inset: 0 !important;
-      padding: 1px !important;
-      border-radius: inherit !important;
-      background: linear-gradient(291.96deg, #4D4A54 0%, #1C1B1F 50%, #4D4A54 100%);
-      pointer-events: none !important;
-      -webkit-mask:
-        linear-gradient(#fff 0 0) content-box,
-        linear-gradient(#fff 0 0);
-      -webkit-mask-composite: xor !important;
-      mask-composite: exclude !important;
-    }
-    .tile-skeleton-toggle     { height: 88px; }
-    .tile-skeleton-brightness { height: 152px; }
 
     .custom-tile-toggle {
       display: flex;
@@ -578,7 +543,6 @@ class EmelyaLightPanelHui extends LitElement {
     this._lastTap = 0;
     this._lastBrightness = {};
     this._lastIsOn = {};
-    this._tilesVisible = false;
     // Хранилище observers для корректной очистки при перестройке
     this._handleObservers = [];
   }
@@ -682,85 +646,87 @@ class EmelyaLightPanelHui extends LitElement {
     });
   }
 
-  async _rebuildCards() {
-    const token = ++this._buildToken;
 
-    // Отключаем предыдущие observers перед перестройкой
-    this._handleObservers.forEach((mo) => mo.disconnect());
-    this._handleObservers = [];
+async _rebuildCards() {
+  const token = ++this._buildToken;
 
-    const tiles = Array.isArray(this.config?.tiles) ? this.config.tiles : [];
-    const validTiles = tiles.filter((tile) => tile?.entity);
+  this._handleObservers.forEach((mo) => mo.disconnect());
+  this._handleObservers = [];
 
-    this._tilesVisible = false;
+  const tiles = Array.isArray(this.config?.tiles) ? this.config.tiles : [];
+  const validTiles = tiles.filter((tile) => tile?.entity);
 
-    if (!validTiles.length) {
-      this._cards = [];
-      this._syncPowerState();
-      this._tilesVisible = true;
-      this.requestUpdate();
-      return;
-    }
-
-    try {
-      const helpers = await window.loadCardHelpers();
-      if (token !== this._buildToken) return;
-
-      const built = await Promise.all(
-        validTiles.map(async (tile) => {
-          try {
-            const cfg = normalizeTileConfig(tile, this.base);
-            const card = await helpers.createCardElement(cfg);
-            if (this._hass) card.hass = this._buildHassForCards(this._hass);
-            return card;
-          } catch (err) {
-            console.error("emelya-light-panel-hui: tile build error", tile, err);
-            return null;
-          }
-        })
-      );
-
-      if (token !== this._buildToken) return;
-
-      this._cards = built.filter(Boolean);
-      this._syncPowerState();
-
-      this.requestUpdate();
-      await this.updateComplete;
-
-      await new Promise(resolve => {
-        let attempts = 0;
-        const check = () => {
-          const ready = this._cards.some(card =>
-            card.shadowRoot?.querySelector("ha-control-slider")
-          );
-          if (ready || attempts++ > 20) resolve();
-          else setTimeout(check, 50);
-        };
-        check();
-      });
-      if (token !== this._buildToken) return;
-
-      for (let i = 0; i < this._cards.length; i++) {
-        const card = this._cards[i];
-        const entityId = validTiles[i]?.entity;
-        if (!entityId) continue;
-        await yieldToMain();
-        this._forceShowHandle(card);
-        await yieldToMain();
-        const isOn = this._hass?.states?.[entityId]?.state === "on";
-        this._lastIsOn[entityId] = isOn;
-        this._updateSliderColors(card, isOn);
-      }
-
-      this._tilesVisible = true;
-    } catch (err) {
-      console.error("emelya-light-panel-hui: rebuild error", err);
-      this._cards = [];
-      this._tilesVisible = true;
-      this.requestUpdate();
-    }
+  if (!validTiles.length) {
+    this._cards = [];
+    this._syncPowerState();
+    this.requestUpdate();
+    return;
   }
+
+  try {
+    const helpers = await window.loadCardHelpers();
+    if (token !== this._buildToken) return;
+
+    // Поставить вместо:
+    const built = await Promise.all(
+      validTiles.map(async (tile) => {
+        try {
+          const card = await helpers.createCardElement(tile);
+          if (this._hass) card.hass = this._buildHassForCards(this._hass);
+          // Скрываем только brightness-карты — у них мигают стили слайдера
+          if (detectTileMode(tile) === "brightness") {
+            card.style.opacity = "0";
+            card.style.transition = "opacity 0.15s ease";
+          }
+          return card;
+        } catch (err) {
+          console.error("emelya-light-panel-hui: tile build error", tile, err);
+          return null;
+        }
+      })
+    );
+
+    if (token !== this._buildToken) return;
+
+    this._cards = built.filter(Boolean);
+    this._syncPowerState();
+
+    this.requestUpdate();
+    await this.updateComplete;
+
+    // Ждём слайдер только у brightness-тайлов, toggle не трогаем
+    await Promise.all(this._cards.map((card, i) => new Promise(resolve => {
+      if (detectTileMode(validTiles[i]) !== "brightness") return resolve();
+      if (card.shadowRoot?.querySelector("ha-control-slider")) return resolve();
+      const mo = new MutationObserver(() => {
+        if (card.shadowRoot?.querySelector("ha-control-slider")) {
+          mo.disconnect();
+          resolve();
+        }
+      });
+      mo.observe(card.shadowRoot || card, { childList: true, subtree: true });
+      setTimeout(() => { mo.disconnect(); resolve(); }, 2000);
+    })));
+
+    if (token !== this._buildToken) return;
+
+    await Promise.all(this._cards.map(async (card, i) => {
+      const entityId = validTiles[i]?.entity;
+      if (!entityId) return;
+      this._forceShowHandle(card);
+      const isOn = this._hass?.states?.[entityId]?.state === "on";
+      this._lastIsOn[entityId] = isOn;
+      this._updateSliderColors(card, isOn);
+      // Показываем карту после того как стили применились
+      card.style.opacity = "1";
+    }));
+
+  } catch (err) {
+    console.error("emelya-light-panel-hui: rebuild error", err);
+    this._cards = [];
+    this.requestUpdate();
+  }
+}
 
   _syncPowerState() {
     if (!this._hass) return;
@@ -1035,14 +1001,6 @@ class EmelyaLightPanelHui extends LitElement {
             : html`<div class="empty">Добавь светильники в визуальном редакторе</div>`}
         </div>
 
-        ${tiles.length ? html`
-          <div class="skeleton-overlay ${this._tilesVisible ? "hidden" : ""}">
-            ${tiles.map((tile) => {
-              const mode = detectTileMode(tile);
-              return html`<div class="tile-skeleton tile-skeleton-${mode === "brightness" ? "brightness" : "toggle"}"></div>`;
-            })}
-          </div>
-        ` : ""}
       </ha-card>
     `;
   }
