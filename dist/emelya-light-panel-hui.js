@@ -301,6 +301,7 @@ class EmelyaLightPanelHui extends LitElement {
     .slider-thumb {
       position: absolute;
       top: 16px;
+      left: 0;
       width: 6px;
       height: 32px;
       background: #ffffff;
@@ -309,6 +310,10 @@ class EmelyaLightPanelHui extends LitElement {
       z-index: 2;
       box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
       transition: left 0.18s ease;
+    }
+
+    .slider-wrap.dragging .slider-thumb {
+      transition: none;
     }
 
     .empty {
@@ -324,8 +329,11 @@ class EmelyaLightPanelHui extends LitElement {
     super();
     this.power = true;
     this._holdTimer = null;
+    this._tapTimer = null;
     this._lastTap = 0;
     this._lastBrightness = {};
+    this._rafPending = false;
+    this._draggingBrightness = {};
   }
 
   setConfig(config) {
@@ -341,6 +349,7 @@ class EmelyaLightPanelHui extends LitElement {
     };
     this.base = this.config.base_path || "/local";
     this.config.tiles = (this.config.tiles || []).map(normalizeTileConfig);
+    this._cachedEntityIds = this.config.tiles.map((t) => t?.entity).filter(Boolean);
   }
 
   get hass() {
@@ -348,7 +357,6 @@ class EmelyaLightPanelHui extends LitElement {
   }
 
   set hass(hass) {
-    this._saveBrightness(this._hass);
     this._saveBrightness(hass);
     this._hass = hass;
     this._syncPowerState();
@@ -370,16 +378,17 @@ class EmelyaLightPanelHui extends LitElement {
 
   _syncPowerState() {
     if (!this._hass) return;
-    const entityIds = (this.config?.tiles || []).map((t) => t?.entity).filter(Boolean);
+    const entityIds = this._lightEntities();
     if (!entityIds.length) { this.power = true; return; }
-    this.power = entityIds.some((id) => {
+    const newPower = entityIds.some((id) => {
       const s = this._hass.states[id];
       return s && s.state !== "off";
     });
+    if (newPower !== this.power) this.power = newPower;
   }
 
   _lightEntities() {
-    return (this.config?.tiles || []).map((t) => t?.entity).filter(Boolean);
+    return this._cachedEntityIds || [];
   }
 
   togglePower(e) {
@@ -426,11 +435,12 @@ class EmelyaLightPanelHui extends LitElement {
     }
   }
 
-  /* ── Custom slider pointer handling ── */
+  /* Custom slider pointer handling */
   _sliderPointerDown(e, entityId) {
     e.stopPropagation();
     const wrap = e.currentTarget;
     wrap.setPointerCapture(e.pointerId);
+    wrap.classList.add("dragging");
     this._applySlider(e, entityId, wrap);
 
     const onMove = (ev) => {
@@ -438,6 +448,8 @@ class EmelyaLightPanelHui extends LitElement {
       this._applySlider(ev, entityId, wrap);
     };
     const onUp = () => {
+      wrap.classList.remove("dragging");
+      delete this._draggingBrightness[entityId];
       wrap.removeEventListener("pointermove", onMove);
       wrap.removeEventListener("pointerup", onUp);
     };
@@ -449,10 +461,23 @@ class EmelyaLightPanelHui extends LitElement {
     if (!this._hass || !entityId) return;
     const rect = wrap.getBoundingClientRect();
     const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
-    const percent = Math.round((x / rect.width) * 100);
-    const brightness = Math.round((percent / 100) * 255);
+
+    // Маппинг совпадает с визуальным диапазоном thumb: [16px .. width-6px]
+    const percent = Math.max(0, Math.min(1, (x - 3) / (rect.width - 16)));
+    const brightness = Math.round(percent * 255);
+
+    // Мгновенное обновление UI без ожидания ответа от HA
+    this._draggingBrightness[entityId] = brightness;
     if (brightness > 0) this._lastBrightness[entityId] = brightness;
-    this._hass.callService("light", "turn_on", { entity_id: entityId, brightness });
+    this.requestUpdate();
+
+    // Отправка команды в HA — троттлинг через RAF
+    if (this._rafPending) return;
+    this._rafPending = true;
+    requestAnimationFrame(() => {
+      this._rafPending = false;
+      this._hass.callService("light", "turn_on", { entity_id: entityId, brightness });
+    });
   }
 
   _openMoreInfo(e, entityId) {
@@ -469,6 +494,17 @@ class EmelyaLightPanelHui extends LitElement {
     frame.addEventListener("pointerdown", this._onPointerDown.bind(this));
     frame.addEventListener("pointerup", this._onPointerUp.bind(this));
     frame.addEventListener("click", this._onClick.bind(this));
+  }
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this._holdTimer) {
+      clearTimeout(this._holdTimer);
+      this._holdTimer = null;
+    }
+    if (this._tapTimer) {
+      clearTimeout(this._tapTimer);
+      this._tapTimer = null;
+    }
   }
 
   _onPointerDown(e) {
@@ -489,6 +525,7 @@ class EmelyaLightPanelHui extends LitElement {
     const now = Date.now();
     if (this._lastTap && now - this._lastTap < 300) {
       if (hasAction(this.config, "double_tap_action")) {
+        clearTimeout(this._tapTimer);
         e.stopImmediatePropagation();
         this._performAction("double_tap");
         this._lastTap = 0;
@@ -496,7 +533,10 @@ class EmelyaLightPanelHui extends LitElement {
       }
     }
     this._lastTap = now;
-    setTimeout(() => { if (this._lastTap === now) this._performAction("tap"); }, 320);
+    clearTimeout(this._tapTimer);
+    this._tapTimer = setTimeout(() => {
+      if (this._lastTap === now) this._performAction("tap");
+    }, 320);
   }
 
   _performAction(actionType) {
@@ -505,6 +545,8 @@ class EmelyaLightPanelHui extends LitElement {
   }
 
   _brightnessPercent(entityId) {
+    const dragging = this._draggingBrightness?.[entityId];
+    if (dragging != null) return Math.round((dragging / 255) * 100);
     const brightness =
       this._hass?.states?.[entityId]?.attributes?.brightness ??
       this._lastBrightness[entityId];
@@ -513,6 +555,8 @@ class EmelyaLightPanelHui extends LitElement {
   }
 
   _brightnessSliderValue(entityId) {
+    const dragging = this._draggingBrightness?.[entityId];
+    if (dragging != null) return Math.round((dragging / 255) * 100);
     const brightness =
       this._hass?.states?.[entityId]?.attributes?.brightness ??
       this._lastBrightness[entityId] ??
@@ -571,13 +615,8 @@ class EmelyaLightPanelHui extends LitElement {
             @click=${(e) => e.stopPropagation()}
             @pointerdown=${(e) => this._sliderPointerDown(e, entityId)}
           >
-            <div class="slider-fill" style="width: calc(16px + ${sliderValue / 100} * (100% - 38px) + 3px)">
-              <div class="slider-thumb"
-                style="right:16px">
-              </div>
-            </div>
-            
-          </div>
+            <div class="slider-fill" style="width: calc(16px + ${sliderValue / 100} * (100% - 16px))"></div>
+            <div class="slider-thumb" style="left: calc(${sliderValue / 100} * (100% - 16px))"></div>          </div>
         </div>
       </div>
     `;
@@ -815,7 +854,7 @@ class EmelyaLightPanelEditor extends LitElement {
   }
 
   _valueChanged = (e) => {
-    this._config = { ...this._config, ...e.detail.value };
+    this._config = clone({ ...this._config, ...e.detail.value });
     this._fire();
   };
 
