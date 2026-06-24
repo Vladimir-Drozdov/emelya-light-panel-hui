@@ -149,7 +149,6 @@ class EmelyaLightPanelHui extends LitElement {
       z-index: 0;
     }
 
-    /* ── Toggle tile ── */
     .custom-tile-toggle {
       display: flex;
       align-items: center;
@@ -189,7 +188,6 @@ class EmelyaLightPanelHui extends LitElement {
       font-size: 15px; font-weight: 400; line-height: 20px;
     }
 
-    /* ── Brightness tile ── */
     .custom-tile-brightness {
       display: flex; flex-direction: row; align-items: stretch;
       gap: 12px; background: #1C1B1F; border-radius: 24px;
@@ -229,7 +227,6 @@ class EmelyaLightPanelHui extends LitElement {
       font-size: 15px; font-weight: 400; line-height: 20px; flex-shrink: 0;
     }
 
-    /* ── Custom Slider ── */
     .slider-wrap {
       position: relative;
       width: 100%;
@@ -242,7 +239,6 @@ class EmelyaLightPanelHui extends LitElement {
       box-sizing: border-box;
     }
 
-    /* Gradient border via ::before — rendered above fill/thumb via z-index */
     .slider-wrap::before {
       content: "";
       position: absolute;
@@ -259,19 +255,16 @@ class EmelyaLightPanelHui extends LitElement {
       mask-composite: exclude;
     }
 
-    /* Track background — ON state: vertical gradient */
     .slider-wrap.on {
       background: linear-gradient(90deg, #343239 50%, #1C1B1F 100%);
 
 
     }
 
-    /* Track background — OFF state: flat dark */
     .slider-wrap.off {
       background: #1C1B1F;
     }
 
-    /* Fill (active portion, left of thumb) */
     .slider-fill {
       position: absolute;
       top: 0;
@@ -292,12 +285,10 @@ class EmelyaLightPanelHui extends LitElement {
       background: #4D4A54;
     }
 
-    /* OFF state fill: vertical gradient */
     .slider-wrap.off .slider-fill {
       background: linear-gradient(270deg, #343239 0%, #1C1B1F 100%);
     }
 
-    /* Thumb — white vertical pill */
     .slider-thumb {
       position: absolute;
       top: 16px;
