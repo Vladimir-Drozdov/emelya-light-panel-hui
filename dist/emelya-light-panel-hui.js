@@ -280,7 +280,6 @@ class EmelyaLightPanelHui extends LitElement {
       transition: none;
     }
 
-    /* ON state fill: flat surface-4 */
     .slider-wrap.on .slider-fill {
       background: #4D4A54;
     }
@@ -426,7 +425,6 @@ class EmelyaLightPanelHui extends LitElement {
     }
   }
 
-  /* Custom slider pointer handling */
   _sliderPointerDown(e, entityId) {
     e.stopPropagation();
     const wrap = e.currentTarget;
@@ -915,7 +913,6 @@ if (!customElements.get("emelya-light-panel-editor")) {
   customElements.define("emelya-light-panel-editor", EmelyaLightPanelEditor);
 }
 
-/* REGISTER */
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: "custom:emelya-light-panel-hui",
